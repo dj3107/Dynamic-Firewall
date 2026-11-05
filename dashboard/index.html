@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic Firewall · live</title>
+<style>
+  :root {
+    --bg: #0b1020; --panel: #141b2e; --panel2: #10172a; --line: #26304a; --ink: #e8edf7; --muted: #8e9ab3;
+    --blue: #58a0ff; --green: #48d68c; --red: #ff5c68; --orange: #ffaa46; --purple: #b084ff; --teal: #40d6d6;
+    --yellow: #ffd65a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: radial-gradient(1200px 700px at 15% 0%, #16204a 0%, var(--bg) 60%) fixed;
+         color: var(--ink); font: 15px/1.4 "DejaVu Sans", "Segoe UI", system-ui, sans-serif; }
+  .mono { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; }
+  header { display: flex; align-items: center; gap: 18px; padding: 14px 22px 8px; flex-wrap: wrap; }
+  header h1 { font-size: 22px; margin: 0; letter-spacing: .2px; }
+  header h1 small { color: var(--muted); font-weight: normal; font-size: 14px; margin-left: 8px; }
+  .pill { padding: 4px 12px; border-radius: 999px; font-weight: bold; font-size: 13px; border: 1px solid; }
+  .pill.up { color: var(--green); border-color: var(--green); background: #48d68c1a; }
+  .pill.down { color: var(--red); border-color: var(--red); background: #ff5c6826; animation: blink 1s infinite; }
+  .stat { color: var(--muted); font-size: 13px; }
+  .stat b { color: var(--ink); font-size: 16px; }
+  .spacer { flex: 1; }
+  #banner { margin: 6px 22px 12px; padding: 12px 18px; border-radius: 14px; background: linear-gradient(90deg, #1d2a52, #172038);
+            border: 1px solid var(--line); display: flex; gap: 16px; align-items: center; min-height: 64px; }
+  #banner .step { font-size: 30px; font-weight: bold; color: var(--yellow); min-width: 44px; text-align: center; }
+  #banner .title { font-size: 20px; font-weight: bold; }
+  #banner .hint { color: #c4cde0; font-size: 15px; }
+  main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; padding: 0 22px 14px; }
+  .card { background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line); border-radius: 14px;
+          padding: 12px 14px; min-width: 0; }
+  .card h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); }
+  .right { display: grid; gap: 14px; grid-template-rows: auto auto; min-width: 0; }
+  svg { width: 100%; height: auto; display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; color: var(--muted); font-weight: normal; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  td { padding: 6px; border-bottom: 1px solid #1d2640; }
+  tr.new td { animation: flash 2.2s ease-out; }
+  .act { font-weight: bold; padding: 2px 8px; border-radius: 6px; font-size: 12px; }
+  .act.block { background: #ff5c6833; color: var(--red); }
+  .act.deny { background: #ffaa4633; color: var(--orange); }
+  .act.allow { background: #48d68c33; color: var(--green); }
+  .empty { color: var(--muted); font-style: italic; padding: 10px 6px; }
+  canvas { width: 100%; height: 190px; display: block; }
+  .legend { display: flex; gap: 14px; font-size: 12.5px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 12px; height: 4px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+  #events { padding: 0 22px 22px; }
+  #feed { height: 230px; overflow: auto; font-size: 13px; background: var(--panel2); border-radius: 10px; padding: 8px 12px; }
+  #feed div { white-space: pre-wrap; word-break: break-word; padding: 1px 0; }
+  #feed .alert { color: var(--yellow); } #feed .bad { color: var(--red); } #feed .good { color: var(--green); }
+  #feed .warn { color: var(--orange); } #feed .plain { color: #aab4c8; }
+  #feed div.fresh { animation: flash 2.2s ease-out; }
+  .row { display: flex; justify-content: space-between; align-items: center; }
+  label { color: var(--muted); font-size: 13px; cursor: pointer; }
+  @keyframes flash { from { background: #ffd65a40; } to { background: transparent; } }
+  @keyframes blink { 50% { opacity: .55; } }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Dynamic Firewall <small>live view · Mininet + Ryu + OpenFlow 1.3</small></h1>
+  <span id="ctl" class="pill down">controller …</span>
+  <span class="spacer"></span>
+  <span class="stat">rules in switch <b id="nrules">–</b></span>
+  <span class="stat">packets dropped <b id="ndrop">–</b></span>
+  <span class="stat mono" id="clock"></span>
+</header>
+<div id="banner"><div class="step" id="bstep">●</div><div><div class="title" id="btitle">Live view</div>
+  <div class="hint" id="bhint">Waiting for traffic. Run the demo (sudo python3 demo.py) or type commands in Mininet.</div></div></div>
+<main>
+  <section class="card">
+    <h2>Network</h2>
+    <svg id="topo" viewBox="0 0 760 500" aria-label="network topology"></svg>
+  </section>
+  <div class="right">
+    <section class="card">
+      <h2>Rules in the switch · table 0</h2>
+      <table><thead><tr><th>Action</th><th>Match</th><th>Prio</th><th>Packets</th><th>Age</th></tr></thead>
+        <tbody id="rules"></tbody></table>
+    </section>
+    <section class="card">
+      <h2>Traffic per host · measured by the switch</h2>
+      <canvas id="chart" width="900" height="380"></canvas>
+      <div class="legend" id="legend"></div>
+    </section>
+  </div>
+</main>
+<section id="events">
+  <div class="card">
+    <div class="row"><h2>Security events · logs/security_events.log</h2>
+      <label><input type="checkbox" id="showall"> show every message</label></div>
+    <div id="feed" class="mono"></div>
+  </div>
+</section>
+<script>
+"use strict";
+const HOSTS = {"10.0.0.1": "h1", "10.0.0.2": "h2", "10.0.0.3": "h3", "10.0.0.254": "nat0"};
+const COLORS = {h1: "#58a0ff", h2: "#48d68c", h3: "#ff5c68", nat0: "#8e9ab3"};
+const name = ip => HOSTS[ip] || ip;
+const POS = {ryu: [380, 70], nat0: [640, 70], h2: [110, 190], h3: [110, 410], s1: [380, 300], h1: [640, 300]};
+const SUB = {h1: "10.0.0.1 · log server", h2: "10.0.0.2 · client", h3: "10.0.0.3 · client",
+             s1: "Open vSwitch", ryu: "SDN controller", nat0: "10.0.0.254"};
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("topo");
+let offset = -1, data = null, lastOk = 0;
+const history = {};               // ip -> [[t, bps]]
+const seenRules = new Set();
+const packets = [];               // animated dots
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  (parent || svg).appendChild(e);
+  return e;
+}
+
+// ---------------------------------------------------------------- static topology
+const gLinks = el("g", {}), gPk = el("g", {}), gNodes = el("g", {}), gBadges = el("g", {});
+function link(a, b, cls, extra) {
+  const pts = [POS[a]].concat(extra || []).concat([POS[b]]);
+  return el("polyline", {points: pts.map(p => p.join(",")).join(" "), fill: "none",
+                         stroke: cls.stroke, "stroke-width": cls.w || 5, "stroke-dasharray": cls.dash || "",
+                         "stroke-linecap": "round"}, gLinks);
+}
+const L = {
+  h2: link("h2", "s1", {stroke: "#34405e"}), h3: link("h3", "s1", {stroke: "#34405e"}),
+  h1: link("s1", "h1", {stroke: "#34405e"}),
+  of: link("s1", "ryu", {stroke: "#40d6d655", w: 3, dash: "6 6"}),
+  rest: link("h1", "ryu", {stroke: "#b084ff55", w: 3, dash: "6 6"}, [POS.nat0]),
+};
+el("text", {x: 392, y: 190, fill: "#40d6d6", "font-size": 12}, gLinks).textContent = "OpenFlow 1.3";
+el("text", {x: 500, y: 60, fill: "#b084ff", "font-size": 12}, gLinks).textContent = "REST :8080";
+
+const N = {};
+function node(id, label, color) {
+  const [x, y] = POS[id], w = id === "nat0" ? 130 : 170, h = 64;
+  const g = el("g", {}, gNodes);
+  const glow = el("rect", {x: x - w / 2 - 8, y: y - h / 2 - 8, width: w + 16, height: h + 16, rx: 22,
+                           fill: color, opacity: 0}, g);
+  const box = el("rect", {x: x - w / 2, y: y - h / 2, width: w, height: h, rx: id === "s1" ? 30 : 14,
+                          fill: "#141b2e", stroke: color, "stroke-width": 3}, g);
+  el("text", {x, y: y - 4, "text-anchor": "middle", fill: "#e8edf7", "font-size": 20, "font-weight": "bold"}, g).textContent = label;
+  el("text", {x, y: y + 18, "text-anchor": "middle", fill: "#8e9ab3", "font-size": 12}, g).textContent = SUB[id];
+  N[id] = {g, box, glow, color};
+}
+node("ryu", "Ryu", "#b084ff"); node("nat0", "nat0", "#8e9ab3"); node("h2", "h2", "#48d68c");
+node("h3", "h3", "#ff5c68"); node("s1", "s1", "#40d6d6"); node("h1", "h1", "#58a0ff");
+
+// ---------------------------------------------------------------- live state -> visuals
+function badge(x, y, text, color) {
+  const w = text.length * 8.4 + 22;
+  el("rect", {x: x - w / 2, y: y - 13, width: w, height: 26, rx: 8, fill: "#0b1020", stroke: color, "stroke-width": 2}, gBadges);
+  el("text", {x, y: y + 5, "text-anchor": "middle", fill: color, "font-size": 13, "font-weight": "bold"}, gBadges).textContent = text;
+}
+
+function renderTopo() {
+  gBadges.innerHTML = "";
+  const rules = data ? data.rules : [];
+  const blocked = new Set(rules.filter(r => r.action === "block").map(r => name(r.src)));
+  const trusted = new Set(rules.filter(r => r.action === "allow").map(r => name(r.src)));
+  const denies = rules.filter(r => r.action === "deny");
+  for (const h of ["h1", "h2", "h3"]) {
+    const n = N[h];
+    const isB = blocked.has(h), isT = trusted.has(h);
+    n.box.setAttribute("stroke", isB ? "#ff5c68" : n.color);
+    n.glow.setAttribute("fill", isB ? "#ff5c68" : (isT ? "#48d68c" : n.color));
+    n.glow.setAttribute("opacity", isB ? 0.28 : (isT ? 0.14 : 0));
+    const ln = L[h];
+    ln.setAttribute("stroke", isB ? "#ff5c68" : "#34405e");
+    ln.setAttribute("stroke-dasharray", isB ? "10 8" : "");
+    const [x, y] = POS[h];
+    if (isB) badge(x, y - 50, "BLOCKED", "#ff5c68");
+    else if (isT) badge(x, y - 50, "TRUSTED · ALLOW", "#48d68c");
+  }
+  denies.forEach((r, i) => {
+    const h = name(r.src);
+    if (!POS[h]) return;
+    const [x0, y0] = POS[h], [x1, y1] = POS.s1, f = 0.55;
+    badge(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f - 22 - i * 30, "✕ " + name(r.dst) + ":" + r.dport + " DENIED", "#ffaa46");
+  });
+  const up = data && data.up;
+  N.ryu.box.setAttribute("stroke", up ? "#b084ff" : "#5b6478");
+  N.ryu.glow.setAttribute("opacity", up ? 0 : 0.25);
+  N.ryu.glow.setAttribute("fill", "#ff5c68");
+  if (!up) badge(POS.ryu[0], POS.ryu[1] - 50, "CONTROLLER DOWN", "#ff5c68");
+  // rule chips under the switch
+  const chips = rules.map(r => r.action.toUpperCase() + " " + name(r.src) + (r.dport ? "→" + name(r.dst) + ":" + r.dport : ""));
+  chips.slice(0, 4).forEach((c, i) => {
+    const col = c.startsWith("BLOCK") ? "#ff5c68" : c.startsWith("DENY") ? "#ffaa46" : "#48d68c";
+    badge(POS.s1[0], POS.s1[1] + 56 + i * 30, c, col);
+  });
+}
+
+// ---------------------------------------------------------------- packets (driven by measured bps)
+let lastSpawn = {};
+function spawn(now) {
+  if (!data || !data.stats || !data.stats.sources) return;
+  const blocked = new Set((data.rules || []).filter(r => r.action === "block").map(r => r.src));
+  for (const [ip, s] of Object.entries(data.stats.sources)) {
+    const h = name(ip);
+    if (!["h1", "h2", "h3"].includes(h)) continue;
+    const bps = s.bps || 0;
+    if (bps < 2000) continue;
+    const every = Math.max(90, 900 - 130 * Math.log10(bps));      // more traffic -> denser dots
+    if ((now - (lastSpawn[h] || 0)) < every) continue;
+    lastSpawn[h] = now;
+    const path = h === "h1" ? [POS.h1, POS.s1] : [POS[h], POS.s1, POS.h1];
+    packets.push({path, t0: now, dur: path.length === 2 ? 650 : 1300, color: COLORS[h], dies: blocked.has(ip)});
+  }
+}
+function pointOn(path, f) {
+  const n = path.length - 1, seg = Math.min(n - 1, Math.floor(f * n)), k = f * n - seg;
+  const [a, b] = [path[seg], path[seg + 1]];
+  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+}
+function animate(now) {
+  spawn(now);
+  gPk.innerHTML = "";
+  for (let i = packets.length - 1; i >= 0; i--) {
+    const p = packets[i], f = (now - p.t0) / p.dur;
+    if (f > 1 || (p.dies && f > 0.62)) { packets.splice(i, 1); continue; }
+    if (p.dies && f > 0.47) {                          // dropped at the switch
+      const [x, y] = POS.s1, k = (f - 0.47) / 0.15;
+      el("text", {x: x - 60, y: y - 30 + (p.path[0][1] < y ? -10 : 10), fill: "#ff5c68", "font-size": 22,
+                  "font-weight": "bold", opacity: 1 - k}, gPk).textContent = "✕";
+      continue;
+    }
+    const [x, y] = pointOn(p.path, f);
+    el("circle", {cx: x, cy: y, r: 11, fill: p.color, opacity: 0.18}, gPk);
+    el("circle", {cx: x, cy: y, r: 6, fill: p.color}, gPk);
+  }
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+// ---------------------------------------------------------------- rules table
+function age(created) {
+  const s = Math.max(0, Date.now() / 1000 - created);
+  return s < 90 ? s.toFixed(0) + " s" : (s / 60).toFixed(1) + " min";
+}
+function renderRules() {
+  const tb = document.getElementById("rules");
+  const rules = data ? data.rules : [];
+  if (data && !data.up) { tb.innerHTML = '<tr><td colspan="5" class="empty">controller unreachable — rules unknown (the switch keeps the rules it already has)</td></tr>'; return; }
+  if (!rules.length) { tb.innerHTML = '<tr><td colspan="5" class="empty">no firewall rules — all traffic is forwarded normally</td></tr>'; return; }
+  tb.innerHTML = "";
+  for (const r of rules.slice().sort((a, b) => b.priority - a.priority)) {
+    const key = r.id + "/" + r.created;
+    const tr = document.createElement("tr");
+    if (!seenRules.has(key)) { tr.className = "new"; seenRules.add(key); }
+    let m = "src " + name(r.src);
+    if (r.dst) m += " → " + name(r.dst);
+    if (r.proto) m += " " + r.proto + (r.dport ? ":" + r.dport : "");
+    tr.innerHTML = `<td><span class="act ${r.action}">${r.action.toUpperCase()}</span></td>
+      <td class="mono">${m}</td><td class="mono">${r.priority}</td><td class="mono">${r.packets}</td>
+      <td class="mono">${age(r.created)}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+// ---------------------------------------------------------------- traffic chart
+function recordRates() {
+  const now = Date.now() / 1000, src = (data && data.stats && data.stats.sources) || {};
+  for (const ip of Object.keys(HOSTS)) {
+    (history[ip] = history[ip] || []).push([now, src[ip] ? src[ip].bps : 0]);
+    while (history[ip].length && history[ip][0][0] < now - 60) history[ip].shift();
+  }
+}
+function niceMax(v) {
+  const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+  for (const s of steps) if (v <= s) return s;
+  return Math.ceil(v / 10000) * 10000;
+}
+function renderChart() {
+  const c = document.getElementById("chart"), g = c.getContext("2d");
+  const W = c.width, H = c.height, padL = 70, padB = 30, padT = 34, padR = 12;
+  g.clearRect(0, 0, W, H);
+  let peak = 0.5;
+  for (const ip in history) for (const [, b] of history[ip]) peak = Math.max(peak, b / 1e6);
+  const ymax = niceMax(peak * 1.15), now = Date.now() / 1000;
+  g.font = "20px DejaVu Sans Mono, monospace"; g.fillStyle = "#8e9ab3"; g.strokeStyle = "#26304a"; g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (H - padT - padB) * (1 - i / 4);
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke();
+    g.fillText((ymax * i / 4).toFixed(ymax <= 2 ? 2 : ymax < 4 ? 1 : 0), 6, y + 6);
+  }
+  g.fillText("Mbit/s", padL + 8, 22); g.fillText("−60 s", padL, H - 4); g.fillText("now", W - padR - 44, H - 4);
+  for (const ip in history) {
+    const pts = history[ip]; if (pts.length < 2) continue;
+    g.strokeStyle = COLORS[name(ip)] || "#ccc"; g.lineWidth = 4; g.beginPath();
+    pts.forEach(([t, b], i) => {
+      const x = padL + (W - padL - padR) * (1 - (now - t) / 60), y = padT + (H - padT - padB) * (1 - (b / 1e6) / ymax);
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
+    g.stroke();
+  }
+  document.getElementById("legend").innerHTML = Object.keys(HOSTS).map(ip => {
+    const h = name(ip), last = (history[ip] || []).slice(-1)[0];
+    return `<span><i style="background:${COLORS[h]}"></i>${h} ${last ? (last[1] / 1e6).toFixed(2) : "0.00"} Mbit/s</span>`;
+  }).join("");
+}
+
+// ---------------------------------------------------------------- event feed
+function classify(line) {
+  if (/ALERT/.test(line)) return "alert";
+  if (/WARNING/.test(line)) return "warn";
+  if (/UNBLOCKED|reachable again|expired|ALLOW rule|installed on the controller/.test(line)) return "good";
+  if (/BLOCKED|DENY|DENIED/.test(line)) return "bad";
+  return "plain";
+}
+function addEvents(lines, fresh) {
+  const feed = document.getElementById("feed"), all = document.getElementById("showall").checked;
+  const atBottom = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 30;
+  for (const raw of lines) {
+    const noisy = /\] (EVENT|CONNECT|DISCONNECT) /.test(raw);
+    const d = document.createElement("div");
+    d.textContent = raw.replace(/, response=\{.*\}$/, "").replace(/^\[\d{4}-\d\d-\d\d /, "[");
+    d.className = classify(raw) + (fresh ? " fresh" : "") + (noisy ? " noisy" : "");
+    if (noisy && !all) d.style.display = "none";
+    feed.appendChild(d);
+  }
+  while (feed.children.length > 600) feed.removeChild(feed.firstChild);
+  if (atBottom) feed.scrollTop = feed.scrollHeight;
+}
+document.getElementById("showall").addEventListener("change", e => {
+  for (const d of document.querySelectorAll("#feed .noisy")) d.style.display = e.target.checked ? "" : "none";
+});
+
+// ---------------------------------------------------------------- polling
+function renderHeader() {
+  const ctl = document.getElementById("ctl"), up = data && data.up;
+  ctl.className = "pill " + (up ? "up" : "down");
+  ctl.textContent = up ? "controller UP" : "controller DOWN";
+  document.getElementById("nrules").textContent = data ? data.rules.length : "–";
+  const dr = data && data.stats && data.stats.dropped;
+  document.getElementById("ndrop").textContent = dr ? dr.packets : "–";
+  const demo = data && data.demo;
+  document.getElementById("bstep").textContent = demo && demo.step ? demo.step : "●";
+  document.getElementById("btitle").textContent = demo && demo.title ? demo.title : "Live view";
+  document.getElementById("bhint").textContent = demo && demo.hint ? demo.hint :
+    "Waiting for traffic. Run the demo (sudo python3 demo.py) or type commands in Mininet.";
+}
+async function poll() {
+  try {
+    const r = await fetch("/api/state?since=" + offset, {cache: "no-store"});
+    const d = await r.json();
+    if (d.reset) document.getElementById("feed").innerHTML = "";
+    addEvents(d.events, offset >= 0);
+    offset = d.offset; data = d; lastOk = Date.now();
+  } catch (e) {
+    data = data ? Object.assign({}, data, {up: false}) : null;
+  }
+  recordRates(); renderHeader(); renderTopo(); renderRules(); renderChart();
+  document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+}
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>
