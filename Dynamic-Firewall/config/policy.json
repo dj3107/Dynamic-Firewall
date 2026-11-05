@@ -1,0 +1,21 @@
+{
+  "listen_ports": [9000, 9001],
+  "rate": {
+    "window_seconds": 5,
+    "threshold": 8,
+    "recovery_seconds": 15
+  },
+  "trusted_sources": ["10.0.0.2"],
+  "services": {
+    "9000": {
+      "name": "logging",
+      "policy": "rate_limit"
+    },
+    "9001": {
+      "name": "admin",
+      "policy": "allowlist",
+      "allowed_sources": ["10.0.0.2"],
+      "deny_seconds": 30
+    }
+  }
+}
