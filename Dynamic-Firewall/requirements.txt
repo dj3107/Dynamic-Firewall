@@ -1,4 +1,0 @@
-ryu (GitHub master)
-eventlet==0.33.3
-dnspython==2.2.1
-webob
